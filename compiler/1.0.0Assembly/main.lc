@@ -1,1 +1,3 @@
-mov(rax, 10)
+var x = "A"
+mov(rax, 1)
+exec()

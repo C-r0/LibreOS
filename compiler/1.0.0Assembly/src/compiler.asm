@@ -26,6 +26,12 @@ section .data
 	; MOV
 	cmd_mov_str: db "mov",0 
 	cmd_mov_rax: db "rax",0
+	cmd_mov_rdi: db "rdi",0
+	cmd_mov_rsi: db "rsi",0
+	cmd_mov_rdx: db "rdx",0
+	; VARIABLES
+	cmd_var_str: db "var",0
+	var_memory_base: dq 0x600000
 
 section .bss
 	end_fd: resq 1
@@ -40,7 +46,14 @@ section .bss
 	cmd_arg_2: resb 64
 	cmd_arg_2_len: resq 1
 	codgen_buffer: resb 32
-
+	is_addr: resq 1
+	var_symbols: resb 2048
+	symbol_count: resq 1
+	var_name: resb 64
+	var_name_len: resq 1
+	var_value: resb 64
+	var_value_len: resq 1
+	
 section .text
 	global _start
 
@@ -222,7 +235,7 @@ haschar:
 	cmp al, '('
 	je endcmd
 	cmp al, ' '
-	je errorline
+	je endcmd
 	cmp al, 10
 	je errorline
 
@@ -235,8 +248,6 @@ haschar:
 endcmd:
 	mov byte [token + rdi], 0
 	mov [token_len], rdi
-
-	call pickarg
 
 	mov eax, [token]
 	
@@ -251,6 +262,10 @@ endcmd:
 	mov edx, [cmd_mov_str]
 	cmp eax, edx
 	je cmdmov
+
+	mov edx, [cmd_var_str]
+	cmp eax, edx
+	je cmdvar
 
 	jmp errorline
 
@@ -301,6 +316,9 @@ pickarg:
 
     cmp al, ' '
     je .second_arg_jump
+
+    cmp al, '['
+    je .second_arg_variable
     
     cmp al, 10
     je errorline
@@ -315,9 +333,43 @@ pickarg:
 	inc rbx
 	jmp .second_arg_loop
 
+.second_arg_variable:
+	cmp rbx, r12
+	jge errorline
+	inc rdi
+	inc rbx
+	mov al, [file + rbx]
+
+	cmp al, ')'
+	je errorline
+
+	cmp al, ' '
+	je errorline
+
+	cmp al, ']'
+	je .second_arg_variable_done
+
+	cmp al, 10
+	je errorline
+
+	mov [cmd_arg_2 + rdi], al
+	inc rdi
+	inc rbx
+
+	jmp .second_arg_variable
+
+.second_arg_variable_done:
+	mov byte [cmd_arg_2 + rdi], 0
+	mov [cmd_arg_2_len], rdi
+	mov byte [is_addr], 1
+	inc rbx
+	inc rbx
+	ret
+
 .second_arg_done:
     mov byte [cmd_arg_2 + rdi], 0
     mov [cmd_arg_2_len], rdi
+    mov byte [is_addr], 0
     inc rbx
     ret
 
@@ -329,6 +381,7 @@ pickarg:
 
 ; --- FUNCTION: cmdexit ---
 cmdexit:
+	call pickarg
 	call atoi_arg
 
 	mov byte [codgen_buffer + 0], 0xB8 ; SYSCALL EXIT
@@ -350,6 +403,10 @@ cmdexit:
 ; -------------------------
 ; --- FUNCTION: cmdexec ---
 cmdexec:
+	.clean_line:
+        inc rbx
+        cmp byte [file + rbx], 10
+        jne .clean_line
 	mov word [codgen_buffer + 0], 0x050F
 
 	mov rax, 1
@@ -363,14 +420,33 @@ cmdexec:
 ; -------------------------
 ; --- FUNCTION: cmdmov ---
 cmdmov:
+	call pickarg
 	mov eax, [cmd_mov_rax]
 	mov edx, [cmd_arg]
 	cmp eax, edx
 	je cmdmov_rax
+
+	mov eax, [cmd_mov_rdi]
+	cmp eax, edx
+	je cmdmov_rdi
+
+	mov eax, [cmd_mov_rsi]
+	cmp eax, edx
+	je cmdmov_rsi
+
+	mov eax, [cmd_mov_rdx]
+	cmp eax, edx
+	je cmdmov_rdx
+
+	cmp word [cmd_arg], "al"
+	je cmdmov_al
 	
 	jmp errorline
 
 cmdmov_rax:
+	cmp byte [is_addr], 1
+	je .mov_rax_mem
+
 	mov byte [codgen_buffer + 0], 0x48
 	mov byte [codgen_buffer + 1], 0xB8
 
@@ -385,8 +461,157 @@ cmdmov_rax:
 	syscall
 
 	jmp cmpchar
-; --- FUNCTION: cmdmov ---
 
+.mov_rax_mem:
+	mov byte [codgen_buffer + 0], 0x48
+    mov byte [codgen_buffer + 1], 0x8B
+    mov byte [codgen_buffer + 2], 0x04
+    mov byte [codgen_buffer + 3], 0x25
+
+    call var_to_addr
+
+    mov [codgen_buffer + 4], eax
+
+    mov rax, 1
+    mov rdi, [end_fd]
+    mov rsi, codgen_buffer
+    mov rdx, 8
+    syscall
+
+cmdmov_rdi:
+	mov byte [codgen_buffer + 0], 0x48
+	mov byte [codgen_buffer + 1], 0xBF
+
+	call atoi_arg_2
+
+	mov [codgen_buffer + 2], eax
+
+	mov rax, 1
+	mov rdi, [end_fd]
+	mov rsi, codgen_buffer
+	mov rdx, 10
+	syscall
+
+	jmp cmpchar
+
+cmdmov_rsi:
+	mov byte [codgen_buffer + 0], 0x48
+	mov byte [codgen_buffer + 1], 0xBE
+
+	call atoi_arg_2
+
+	mov [codgen_buffer + 2], eax
+
+	mov rax, 1
+	mov rdi, [end_fd]
+	mov rsi, codgen_buffer
+	mov rdx, 10
+	syscall
+
+	jmp cmpchar
+
+cmdmov_rdx:
+	mov byte [codgen_buffer + 0], 0x48
+	mov byte [codgen_buffer + 1], 0xBA
+
+	call atoi_arg_2
+
+	mov [codgen_buffer + 2], eax
+
+	mov rax, 1
+	mov rdi, [end_fd]
+	mov rsi, codgen_buffer
+	mov rdx, 10
+	syscall
+
+	jmp cmpchar
+
+cmdmov_al:
+	mov byte [codgen_buffer + 0], 0xB0
+
+	call atoi_arg_2
+
+	mov [codgen_buffer + 1], eax
+
+	mov rax, 1
+	mov rdi, [end_fd]
+	mov rsi, codgen_buffer
+	mov rdx, 2
+	syscall
+
+	jmp cmpchar
+; --- FUNCTION: cmdmov ---
+; ------------------------
+var_to_addr:
+	mov eax, 0x600000
+	ret
+; -----------------------
+; --- FUNCTION: cmdvar ---
+cmdvar:
+    inc rbx
+
+.skip_1:
+    mov al, [file + rbx]
+    cmp al, ' '
+    jne .get_name
+    inc rbx
+    jmp .skip_1
+
+.get_name:
+    xor rdi, rdi
+.name_loop:
+    mov al, [file + rbx]
+    cmp al, ' '
+    je .after_name
+    cmp al, '='
+    je .after_name
+    mov [var_name + rdi], al
+    inc rdi
+    inc rbx
+    jmp .name_loop
+
+.after_name:
+    mov byte [var_name + rdi], 0
+    mov [var_name_len], rdi
+
+.skip_2:
+    mov al, [file + rbx]
+    cmp al, '='
+    je .found_equal
+    inc rbx
+    jmp .skip_2
+
+.found_equal:
+    inc rbx
+
+.skip_3:
+    mov al, [file + rbx]
+    cmp al, '"'
+    je .get_string
+    inc rbx
+    jmp .skip_3
+
+.get_string:
+    inc rbx
+    xor rdi, rdi
+.string_loop:
+    mov al, [file + rbx]
+    cmp al, '"'
+    je .done
+    cmp al, 10
+    je errorline
+    mov [var_value + rdi], al
+    inc rdi
+    inc rbx
+    jmp .string_loop
+
+.done:
+    mov byte [var_value + rdi], 0
+    mov [var_value_len], rdi
+    inc rbx
+    
+    jmp cmpchar
+; --- FUNCTION: cmdvar ---
 ; --- FUNCTION: endarchive ---
 endarchive:
 	mov rax, 3
