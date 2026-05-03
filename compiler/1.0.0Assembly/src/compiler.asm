@@ -591,23 +591,8 @@ cmdmov_rax:
 	jmp cmpchar
 
 .mov_rax_mem:
-	mov byte [codgen_buffer + 0], 0x48
-    mov byte [codgen_buffer + 1], 0xB8
-
-    call var_to_addr
-
-    mov [codgen_buffer + 2], eax
-
-    lea rsi, [codgen_buffer]
-    lea rdi, [code_buffer + r14]
-    mov rcx, 10
-    rep movsb
-    
-    add r14, 10
-    
-    mov byte [is_addr], 0
-    
-    jmp cmpchar
+    mov al, 0x05
+    jmp generic_mov_mem
 
 cmdmov_rdi:
 	cmp byte [is_addr], 1
@@ -628,25 +613,10 @@ cmdmov_rdi:
 	add r14, 10
 
 	jmp cmpchar
-
+	
 .mov_rdi_mem:
-	mov byte [codgen_buffer + 0], 0x48
-    mov byte [codgen_buffer + 1], 0xBF
-
-    call var_to_addr
-
-    mov [codgen_buffer + 2], eax
-
-    lea rsi, [codgen_buffer]
-    lea rdi, [code_buffer + r14]
-    mov rcx, 10
-    rep movsb
-    
-    add r14, 10
-    
-    mov byte [is_addr], 0
-    
-    jmp cmpchar
+    mov al, 0x3D
+    jmp generic_mov_mem
 
 cmdmov_rsi:
 	cmp byte [is_addr], 1
@@ -676,12 +646,10 @@ cmdmov_rsi:
     call var_to_addr
     
     mov r8, CODE_LIMIT
-    add r8, rax
-    
+    add r8, rax         
     mov rcx, r14
     add rcx, 7
-    
-    sub r8, rcx         
+    sub r8, rcx
     mov [codgen_buffer + 3], r8d
 
     lea rsi, [codgen_buffer]
@@ -690,7 +658,6 @@ cmdmov_rsi:
     rep movsb
     
     add r14, 7
-    
     mov byte [is_addr], 0
     jmp cmpchar
 
@@ -713,25 +680,10 @@ cmdmov_rdx:
 	add r14, 10
 
 	jmp cmpchar
-
+	
 .mov_rdx_mem:
-	mov byte [codgen_buffer + 0], 0x48
-    mov byte [codgen_buffer + 1], 0xBA
-
-    call var_to_addr
-
-    mov [codgen_buffer + 2], eax
-
-    lea rsi, [codgen_buffer]
-    lea rdi, [code_buffer + r14]
-    mov rcx, 10
-    rep movsb
-    
-    add r14, 10
-    
-    mov byte [is_addr], 0
-    
-    jmp cmpchar
+	mov al, 0x15
+	jmp generic_mov_mem
 
 cmdmov_al:
 	cmp byte [is_addr], 1
@@ -753,19 +705,51 @@ cmdmov_al:
 	jmp cmpchar
 	
 .mov_al_mem:
-	mov byte [codgen_buffer + 0], 0xA0
+    mov byte [codgen_buffer + 0], 0x8A
+    mov byte [codgen_buffer + 1], 0x05
     
     call var_to_addr
-    mov [codgen_buffer + 1], eax
+    
+    mov r8, CODE_LIMIT
+    add r8, rax
+    mov rcx, r14
+    add rcx, 6
+    sub r8, rcx
+    
+    mov [codgen_buffer + 2], r8d
+    
+    lea rsi, [codgen_buffer]
+    lea rdi, [code_buffer + r14]
+    mov rcx, 6
+    rep movsb
+    
+    add r14, 6
+    jmp cmpchar
+
+generic_mov_mem:
+    push rax
+    
+    mov byte [codgen_buffer + 0], 0x48
+    mov byte [codgen_buffer + 1], 0x8B
+    pop rax
+    mov [codgen_buffer + 2], al
+
+    call var_to_addr
+    
+    mov r8, CODE_LIMIT
+    add r8, rax         
+    mov rcx, r14
+    add rcx, 7
+    sub r8, rcx
+    mov [codgen_buffer + 3], r8d
 
     lea rsi, [codgen_buffer]
     lea rdi, [code_buffer + r14]
-    mov rcx, 9
+    mov rcx, 7
     rep movsb
-    add r14, 9
     
-    mov byte [is_addr], 1
-    
+    add r14, 7
+    mov byte [is_addr], 0
     jmp cmpchar
 ; --- FUNCTION: cmdmov ---
 ; ------------------------
@@ -902,11 +886,11 @@ cmdvar:
     mov al, [file + rbx]
     
     cmp al, 10
-    je .done
+    je .doneint
     cmp al, 13
-    je .done
+    je .doneint
     cmp al, ' '
-    je .done
+    je .doneint
     
     cmp al, '0'
     jl .next_int
@@ -918,6 +902,16 @@ cmdvar:
 .next_int:
     inc rbx
     jmp .int_loop
+    
+.doneint:
+    call atoi_int_var
+    
+    mov [var_value], rax
+    
+    mov qword [var_value_len], 8
+    
+    jmp .done
+
 .done:
 	mov byte [var_value + rdi], 0
     mov [var_value_len], rdi
@@ -955,6 +949,25 @@ cmdvar:
     inc rbx
     
     jmp cmpchar
+    
+atoi_int_var:
+	xor rax, rax
+	xor rcx, rcx
+
+.loop_int_var:
+	movzx rdx, byte [var_value + rcx]
+    test dl, dl
+    jz .done_var_int
+    
+    sub dl, '0'
+    imul rax, 10
+    add rax, rdx
+    
+    inc rcx
+    jmp .loop_int_var
+    
+.done_var_int:
+	ret
 ; --- FUNCTION: cmdvar ---
 ; --- FUNCTION: endarchive ---
 endarchive:
