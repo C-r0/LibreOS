@@ -1,0 +1,7 @@
+var x = "MUITO OBRIGADO KKKKK"
+mov(rax, 1)
+mov(rdi, 1)
+mov(rsi, [x])
+mov(rdx, 20)
+exec()
+exit(0)

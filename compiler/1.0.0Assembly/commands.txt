@@ -1,0 +1,2 @@
+objdump -D -b binary -m i386:x86-64 main.bin
+hexdump -C main.bin
