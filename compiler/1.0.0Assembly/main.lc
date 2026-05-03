@@ -1,3 +1,0 @@
-var x = "A"
-mov(rax, 1)
-exec()
