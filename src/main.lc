@@ -1,0 +1,7 @@
+start()
+
+var msg = "LibreOS"
+
+mov(rsi, [msg])
+
+exec(1)

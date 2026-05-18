@@ -1,11 +1,11 @@
 bits 64
 
-%define CODE_LIMIT 2048
+%define CODE_LIMIT 4096
 
 section .data
 	msg_done: db "[*] DONE", 10
 	msg_done_len: equ $-msg_done
-	msg_error_args: db "[X] ERROR ARGS ./compiler main.lc main.bin",10
+	msg_error_args: db "[X] ERROR ARGS ./compiler archive.lc ",10
 	errorargslen: equ $-msg_error_args
 	msg_file_open_error: db "[X] FILE OPEN ERROR",10
 	file_open_errorlen: equ $-msg_file_open_error
@@ -35,6 +35,91 @@ section .data
 	cmd_mov_rdx: db "rdx",0
 	; VARIABLES
 	cmd_var_str: db "var",0
+	; START
+	cmd_start_str: db "start",0 
+	uefi_start_opcodes:
+		db 0x49, 0x89, 0xd4 ; mov r12, rdx
+	uefi_start_len: equ $ - uefi_start_opcodes
+	; EXEC
+	uefi_exec_opcodes:
+		db 0x48, 0x8b, 0x45, 0x40    ; mov rax, [r12 + 64] (Pega ConOut da SystemTable)
+		db 0x48, 0x89, 0xc1          ; mov rcx, rax        (RCX = ConOut, 1º argumento)
+		db 0x48, 0x8b, 0x40, 0x08    ; mov rax, [rax + 8]  (RAX = função OutputString)
+		db 0x48, 0x89, 0xf2          ; mov rdx, rsi        (2º argumento = Sua string em RSI)
+		db 0x48, 0x83, 0xec, 0x28    ; sub rsp, 32         (Shadow Space)
+		db 0xff, 0xd0                ; call rax            (Chama a UEFI)
+		db 0x48, 0x83, 0xc4, 0x28    ; add rsp, 32
+	uefi_exec_len: equ $ - uefi_exec_opcodes
+	; REBOOT
+	uefi_reboot_opcodes:
+		db 0x48, 0x8b, 0x45, 0x58      ; mov rax, [r12 + 88] (RuntimeServices)
+		db 0x48, 0x31, 0xc9            ; xor rcx, rcx (EfiResetCold = 0)
+		db 0x48, 0x31, 0xd2            ; xor rdx, rdx (Status Success)
+		db 0x45, 0x31, 0xc0            ; xor r8d, r8d (DataSize 0)
+		db 0x45, 0x31, 0xc9            ; xor r9d, r9d (ResetData NULL)
+		db 0x48, 0x83, 0xec, 0x28      ; sub rsp, 40 (Shadow space + alinhamento)
+		db 0xff, 0x50, 0x68            ; call [rax + 104]
+		db 0x48, 0x83, 0xc4, 0x28      ; add rsp, 40
+	uefi_reboot_len: equ $ - uefi_reboot_opcodes
+	
+	uefi_newline_data:   db 13, 0, 10, 0, 0, 0, 0, 0 ; CR, LF, NULL
+	uefi_only_newline:   db 10, 0, 0, 0, 0, 0       ; LF, NULL
+	uefi_only_carriage:  db 13, 0, 0, 0, 0, 0       ; CR, NULL
+	; PE HEADER
+	align 512
+    pe_header_data:
+        db 'MZ'
+        times 58 db 0
+        dd 0x80                 ; Offset para o cabeçalho PE
+        times 64 db 0
+        db 'PE', 0, 0           ; Signature
+        dw 0x8664               ; Machine: x86-64
+        dw 2                    ; Number of Sections
+        dd 0, 0, 0              ; TimeDateStamp, PointerToSymbolTable, NumberOfSymbols
+        dw 0xF0                 ; Size of Optional Header
+        dw 0x0023               ; Characteristics (Executable, LargeAddressAware, RelocsStripped)
+        
+        ; --- OPTIONAL HEADER (PE32+) ---
+        dw 0x020B               ; Magic: PE32+ (64-bit)
+        db 0, 0                 ; Major/Minor Linker Version
+        dd 4096                 ; Size of Code
+        dd 4096                 ; Size of Initialized Data
+        dd 0                    ; Size of Uninitialized Data
+        dd 4096                 ; Address of Entry Point (RVA)
+        dd 4096                 ; Base of Code (RVA)
+        
+        dq 0x400000             ; Image Base (8 bytes)
+        dd 4096                 ; Section Alignment
+        dd 512                  ; File Alignment
+        times 16 db 0           ; OS, User, Subsystem Versions
+        dd 12288                ; Size of Image (Headers + Text + Data)
+        dd 4096                  ; Size of Headers
+        dd 0                    ; CheckSum
+        dw 0x000A               ; Subsystem: EFI Application (0x0A)
+        dw 0                    ; DllCharacteristics
+        dq 0, 0, 0, 0           ; Stack/Heap Reserve/Commit
+        dd 0                    ; LoaderFlags
+        dd 16                   ; Number of Data Directories
+        times 128 db 0          ; Data Directories (Empty)
+
+        ; --- SECTION TABLE ---
+        db '.text', 0, 0, 0     ; Name
+        dd 4096                 ; VirtualSize
+        dd 4096                 ; VirtualAddress
+        dd 4096                 ; SizeOfRawData
+        dd 4096                 ; PointerToRawData
+        times 12 db 0           ; Relocs, Linenumbers, etc.
+        dd 0x60000020           ; Characteristics (Code, Execute, Read)
+
+        db '.data', 0, 0, 0     ; Name
+        dd 4096                 ; VirtualSize
+        dd 8192                 ; VirtualAddress
+        dd 4096                 ; SizeOfRawData
+        dd 8192                 ; PointerToRawData
+        times 12 db 0
+        dd 0xC0000040           ; Characteristics (Data, Read, Write)
+
+        times (512 - ($ - pe_header_data)) db 0 ; Padding
 
 section .bss
 	end_fd: resq 1
@@ -50,6 +135,7 @@ section .bss
 	cmd_arg_2_len: resq 1
 	codgen_buffer: resb 32
 	is_addr: resq 1
+	is_address: resq 1
 	var_symbols: resb 2048
 	symbol_count: resq 1
 	var_name: resb 64
@@ -64,8 +150,6 @@ section .text
 
 ; --- FUNCTION: _start ---
 _start:
-	mov byte [symbol_count], 0
-	
 	mov rax, 1
 	mov rdi, 1
 	mov rsi, hello ; Welcome To Compiler
@@ -83,6 +167,16 @@ _start:
 	jl error_args
 	mov rsi,[rsp+16]
 	xor rcx, rcx
+	
+	lea rdi, [code_buffer]
+	xor al, al
+	mov rcx, 4096
+	rep stosb
+	
+	xor rax, rax
+    mov [symbol_count], rax
+    mov r14, rax
+    mov r15, rax
 
 	jmp strlen_loop
 
@@ -136,6 +230,24 @@ errorline:
     mov rsi, newline
     mov rdx, 1
     syscall
+    
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, msg_done
+    mov rdx, 1
+    syscall
+    
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, cmd_arg_2
+    mov rdx, 64
+    syscall
+    
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, msg_done
+    mov rdx, 1
+    syscall
 
 	mov rax, 60
 	xor rdi, rdi 
@@ -153,6 +265,42 @@ errorlinecmd:
     mov rax, 1
     mov rdi, 1
     mov rsi, newline
+    mov rdx, 1
+    syscall
+    
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, msg_done
+    mov rdx, 1
+    syscall
+    
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, cmd_arg_2
+    mov rdx, 64
+    syscall
+    
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, msg_done
+    mov rdx, 1
+    syscall
+    
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, msg_done
+    mov rdx, 1
+    syscall
+    
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, cmd_arg
+    mov rdx, 64
+    syscall
+    
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, msg_done
     mov rdx, 1
     syscall
 
@@ -274,6 +422,17 @@ charnewline:
 
 ; --- FUNCTION: haschar ---
 haschar:
+	push rax
+    push rcx
+    lea rdi, [token]
+    xor rax, rax
+    mov rcx, 8
+    rep stosq
+    pop rcx
+    pop rax
+    xor rdi, rdi
+
+.hascharloop:
     cmp rbx, r12
     jae endcmd
     mov al, [file + rbx]
@@ -296,18 +455,20 @@ haschar:
     mov [token + rdi], al
     inc rdi
     inc rbx
-    jmp haschar
+    jmp .hascharloop
 
 .skip:
     inc rbx
-    jmp haschar
+    cmp rbx, r12
+    jae endarchive
+    jmp .hascharloop
 ; --- FUNCTION: endcmd ---
 endcmd:
 	mov byte [token + rdi], 0
     mov [token_len], rdi
     
     cmp rdi, 0
-    je cmpchar
+    je .check_end
 
     mov rax, 1
     mov rdi, 1
@@ -347,8 +508,18 @@ endcmd:
     lea rdi, [cmd_var_str]
     call strcmp
     jc cmdvar
+    
+    lea rsi, [token]
+    lea rdi, [cmd_start_str]
+    call strcmp
+    jc cmdstart
 
     jmp errorlinecmd
+    
+.check_end:
+	cmp rbx, r12
+    jae endarchive
+    jmp cmpchar
 ; --- FUNCTION: strcmp ---
 strcmp:
     push rax
@@ -374,8 +545,36 @@ strcmp:
     ret
 ; --- FUNCTION: pickarg ---
 pickarg:
-	inc rbx
-	xor rdi, rdi
+    push rax
+    push rcx
+    push rdi
+    
+    lea rdi, [cmd_arg]
+    xor al, al
+    mov rcx, 64
+    rep stosb
+    
+    lea rdi, [cmd_arg_2]
+    xor al, al
+    mov rcx, 64
+    rep stosb
+    
+    pop rdi
+    pop rcx
+    pop rax
+    
+    xor rdi, rdi
+    
+    inc rbx
+    
+.skip_spaces:
+    cmp rbx, r12
+    jae errorline
+    mov al, [file + rbx]
+    cmp al, ' '
+    jne .arg_loop
+    inc rbx
+    jmp .skip_spaces
 
 ; --- FUNCTION: .arg_loop ---
 .arg_loop:
@@ -389,6 +588,9 @@ pickarg:
 
 	cmp al, ','
 	je .more_args
+	
+	cmp al, '['
+	je .first_arg_variable
 
 	cmp al, 10
 	je errorline
@@ -406,9 +608,63 @@ pickarg:
     mov byte [cmd_arg + rdi], 0
     mov [cmd_arg_len], rdi
 	xor rdi, rdi
-	xor rdi, rdi
 	inc rbx
 	jmp .second_arg_loop
+	
+.skip_spaces_arg2:
+    mov al, [file + rbx]
+    cmp al, ' '
+    jne .second_arg_loop
+    inc rbx
+    jmp .skip_spaces_arg2
+
+.first_arg_variable:
+	xor rdi, rdi
+	jmp .first_arg_variable_loop
+	
+.first_arg_variable_loop:
+	cmp rbx, r12
+	jge errorline
+	
+	mov al, [file + rbx]
+
+	cmp al, ')'
+	je errorline
+
+	cmp al, ' '
+	je errorline
+
+	cmp al, ']'
+	je .first_arg_variable_done
+
+	cmp al, 10
+	je errorline
+
+	mov [cmd_arg + rdi], al
+	inc rdi
+	inc rbx
+
+	jmp .first_arg_variable_loop
+
+.first_arg_variable_done:
+	mov byte [cmd_arg + rdi], 0
+	mov [cmd_arg_len], rdi
+	mov byte [is_address], 1
+	xor rdi, rdi
+	inc rbx
+	
+.check_after_var:
+	mov al, [file + rbx]
+	cmp al, ','
+	je .more_args
+	cmp al, ')'
+	je .arg_done
+	cmp al, ' '
+	je .skip_space_after
+	
+.skip_space_after:
+	inc rbx
+	jmp .check_after_var
 
 .second_arg_loop:
     cmp rbx, r12
@@ -420,6 +676,12 @@ pickarg:
     je .second_arg_done
 
     cmp al, ' '
+    je .second_arg_jump
+    
+    cmp al, 10
+    je .second_arg_done
+    
+    cmp al, 13
     je .second_arg_jump
 
     cmp al, '['
@@ -488,11 +750,6 @@ pickarg:
 
 ; --- FUNCTION: cmdexit ---
 cmdexit:
-	mov rax, 1
-	mov rdi, 1
-	mov rsi, cmd_exit_str
-	mov rdx, 4
-
     call pickarg
     call atoi_arg
 
@@ -518,36 +775,101 @@ cmdexit:
 ; -------------------------
 ; --- FUNCTION: cmdexec ---
 cmdexec:
-	mov rax, 1
-	mov rdi, 1
-	mov rsi, cmd_exec_str
-	mov rdx, 4
+    call pickarg
+    call atoi_arg
+    
+    cmp rax, 1
+    je .inject_print
+    cmp rax, 2
+    je .inject_reboot
+    cmp rax, 3
+    je .inject_newline
+    cmp rax, 4
+    je .inject_only_newline
+    cmp rax, 5
+    je .inject_only_carriage
+    jmp cmpchar
 
-	.clean_line:
-        inc rbx
-        cmp byte [file + rbx], 10
-        jne .clean_line
-	mov word [codgen_buffer + 0], 0x050F
+.inject_print:           ; exec(1) - PRINT
+    lea rsi, [uefi_exec_opcodes]
+    mov rcx, uefi_exec_len
+    jmp .copy
 
-	lea rsi, [codgen_buffer]
-	lea rdi, [code_buffer + r14]
-	mov rcx, 2
-	rep movsb
-	
-	add r14, 2
+.inject_reboot:         ; exec(2) - REBOOT
+    lea rsi, [uefi_reboot_opcodes]
+    mov rcx, uefi_reboot_len
+    jmp .copy
+    
+.inject_newline:        ; exec(3) - CRLF
+    lea rsi, [uefi_newline_data]
+    mov rcx, 6
+    jmp .inject_control
 
-	jmp cmpchar
+.inject_only_newline:   ; exec(4) - LF
+    lea rsi, [uefi_only_newline]
+    mov rcx, 4
+    jmp .inject_control
+
+.inject_only_carriage:  ; exec(5) - CR
+    lea rsi, [uefi_only_carriage]
+    mov rcx, 4
+    jmp .inject_control
+
+.inject_control:
+    mov rax, 0x402000
+    add rax, r15
+    push rax
+
+    push rsi
+    push rcx
+    lea rdi, [data_buffer + r15]
+    rep movsb
+    
+    add r15, rcx
+    add r15, 7
+    and r15, -8
+    pop rcx
+    pop rsi
+
+    mov byte [code_buffer + r14], 0x48
+    mov byte [code_buffer + r14 + 1], 0xBE
+    pop rax
+    mov [code_buffer + r14 + 2], rax
+    add r14, 10
+
+    lea rsi, [uefi_exec_opcodes]
+    mov rcx, uefi_exec_len
+    lea rdi, [code_buffer + r14]
+    rep movsb
+    add r14, rcx
+
+    jmp cmpchar
+
+.copy:
+    lea rdi, [code_buffer + r14]
+    mov r11, rcx 
+    rep movsb
+    add r14, r11 
+    
+    jmp cmpchar
 ; --- FUNCTION: cmdexec ---
 ; -------------------------
 ; --- FUNCTION: cmdmov ---
 cmdmov:
+	mov byte [is_addr], 0
+	mov byte [is_address], 0
+	
+	call pickarg
+	
+	cmp [is_address], 1
+	je cmdmov_reg_to_var
+	
 	mov rax, 1
 	mov rdi, 1
-	mov rsi, cmd_mov_str
-	mov rdx, 4
+	mov rsi, cmd_arg_2
+	mov rdx, [cmd_arg_2_len]
+	syscall
 	
-	mov byte [is_addr], 0
-	call pickarg
 	mov eax, [cmd_mov_rax]
 	mov edx, [cmd_arg]
 	cmp eax, edx
@@ -570,8 +892,45 @@ cmdmov:
 	
 	jmp errorline
 
+cmdmov_reg_to_var:
+	mov rax, 1
+	mov rdi, 1
+	mov rsi, cmd_arg_2
+	mov rdx, [cmd_arg_2_len]
+	syscall
+	
+	mov byte [is_addr], 0
+	mov byte [is_address], 1
+	
+	lea rsi, [cmd_arg_2]
+    lea rdi, [cmd_mov_rax]
+    call strcmp
+	jc cmdmov_rax
+	
+	lea rsi, [cmd_arg_2]
+    lea rdi, [cmd_mov_rdi]
+    call strcmp
+	jc cmdmov_rdi
+	
+	lea rsi, [cmd_arg_2]
+    lea rdi, [cmd_mov_rsi]
+    call strcmp
+    jc cmdmov_rsi
+	
+	lea rsi, [cmd_arg_2]
+    lea rdi, [cmd_mov_rdx]
+    call strcmp
+    jc cmdmov_rdx
+	
+	cmp word [cmd_arg_2], "al"
+	je cmdmov_al
+	
+	jmp errorline
+
 cmdmov_rax:
 	cmp byte [is_addr], 1
+	je .mov_rax_mem
+	cmp byte [is_address], 1
 	je .mov_rax_mem
 
 	mov byte [codgen_buffer + 0], 0x48
@@ -597,13 +956,15 @@ cmdmov_rax:
 cmdmov_rdi:
 	cmp byte [is_addr], 1
 	je .mov_rdi_mem
+	cmp byte [is_address], 1
+	je .mov_rdi_mem
 	
 	mov byte [codgen_buffer + 0], 0x48
 	mov byte [codgen_buffer + 1], 0xBF
 
 	call atoi_arg_2
 
-	mov [codgen_buffer + 2], eax
+	mov [codgen_buffer + 2], rax
 
 	lea rsi, [codgen_buffer]
 	lea rdi, [code_buffer + r14]
@@ -621,13 +982,15 @@ cmdmov_rdi:
 cmdmov_rsi:
 	cmp byte [is_addr], 1
 	je .mov_rsi_mem
+	cmp byte [is_address], 1
+	je .mov_rsi_fmem
 	
 	mov byte [codgen_buffer + 0], 0x48
 	mov byte [codgen_buffer + 1], 0xBE
 
 	call atoi_arg_2
 
-	mov [codgen_buffer + 2], eax
+	mov [codgen_buffer + 2], rax
 
 	lea rsi, [codgen_buffer]
 	lea rdi, [code_buffer + r14]
@@ -639,6 +1002,9 @@ cmdmov_rsi:
 	jmp cmpchar
 
 .mov_rsi_mem:
+	mov qword [codgen_buffer], 0
+    mov qword [codgen_buffer + 2], 0
+
     mov byte [codgen_buffer + 0], 0x48
     mov byte [codgen_buffer + 1], 0x8D
     mov byte [codgen_buffer + 2], 0x35
@@ -661,8 +1027,14 @@ cmdmov_rsi:
     mov byte [is_addr], 0
     jmp cmpchar
 
+.mov_rsi_fmem:
+    mov al, 0x35
+    jmp generic_mov_mem
+
 cmdmov_rdx:
 	cmp byte [is_addr], 1
+	je .mov_rdx_mem
+	cmp byte [is_address], 1
 	je .mov_rdx_mem
 	
 	mov byte [codgen_buffer + 0], 0x48
@@ -670,7 +1042,7 @@ cmdmov_rdx:
 
 	call atoi_arg_2
 
-	mov [codgen_buffer + 2], eax
+	mov [codgen_buffer + 2], rax
 
 	lea rsi, [codgen_buffer]
 	lea rdi, [code_buffer + r14]
@@ -688,6 +1060,8 @@ cmdmov_rdx:
 cmdmov_al:
 	cmp byte [is_addr], 1
 	je .mov_al_mem
+	cmp byte [is_address], 1
+	je .mov_al_fmem
 	
 	mov byte [codgen_buffer + 0], 0xB0
 
@@ -726,18 +1100,64 @@ cmdmov_al:
     add r14, 6
     jmp cmpchar
 
-generic_mov_mem:
-    push rax
+.mov_al_fmem:
+	mov byte [codgen_buffer + 0], 0x88
+    mov byte [codgen_buffer + 1], 0x05
     
-    mov byte [codgen_buffer + 0], 0x48
-    mov byte [codgen_buffer + 1], 0x8B
-    pop rax
-    mov [codgen_buffer + 2], al
-
     call var_to_addr
     
     mov r8, CODE_LIMIT
-    add r8, rax         
+    add r8, rax
+    mov rcx, r14
+    add rcx, 6
+    sub r8, rcx
+    
+    mov [codgen_buffer + 2], r8d
+    
+    lea rsi, [codgen_buffer]
+    lea rdi, [code_buffer + r14]
+    mov rcx, 6
+    rep movsb
+    
+    add r14, 6
+    jmp cmpchar
+
+generic_mov_mem:
+	push rax
+    lea rdi, [codgen_buffer]
+    xor rax, rax
+    mov rcx, 4
+    rep stosq
+    pop rax
+    
+    mov byte [codgen_buffer + 0], 0x48
+    mov [codgen_buffer + 2], al
+    cmp [is_addr], 1
+    je .mov_is_addr
+    cmp [is_address], 1
+    je .mov_is_address
+    
+    jmp .continue_gen
+    
+.mov_is_addr:
+	mov byte [codgen_buffer + 1], 0x8B
+	jmp .continue_gen
+
+.mov_is_address:
+	mov byte [codgen_buffer + 1], 0x89
+	jmp .continue_gen
+    
+.continue_gen:
+	mov rax, 1
+    mov rdi, 1
+    mov rsi, cmd_arg
+    mov rdx, 32
+    syscall
+
+	call var_to_addr
+    
+    mov r8, CODE_LIMIT
+    add r8, rax
     mov rcx, r14
     add rcx, 7
     sub r8, rcx
@@ -750,7 +1170,9 @@ generic_mov_mem:
     
     add r14, 7
     mov byte [is_addr], 0
+    mov byte [is_address], 0
     jmp cmpchar
+    
 ; --- FUNCTION: cmdmov ---
 ; ------------------------
 var_to_addr:
@@ -759,54 +1181,75 @@ var_to_addr:
     push rcx
     push rbx
 
-    xor rbx, rbx
     mov rcx, [symbol_count]
+    xor rbx, rbx
+
+    cmp byte [is_addr], 1
+    je .use_arg2
+    cmp byte [is_address], 1
+    je .use_arg1
+    lea rsi, [cmd_arg]
+    jmp .search_loop
+
+.use_arg1:
+    lea rsi, [cmd_arg]
+        
+    mov rax, 1
+    mov rdi, 1
+    mov rdx, [cmd_arg_len]
+    syscall
+    jmp .search_loop
+
+.use_arg2:
+    lea rsi, [cmd_arg_2]
+        
+    mov rax, 1
+    mov rdi, 1
+    mov rdx, [cmd_arg_2_len]
+    syscall
+    jmp .search_loop
 
 .search_loop:
     cmp rbx, rcx
     jge .not_found
 
-    lea rsi, [cmd_arg_2]
     lea rdi, [var_symbols + rbx]
+    xor r10, r10
 
-    mov r10, 0
-.compare_name:
+.compare_loop:
     mov al, [rsi + r10]
     mov dl, [rdi + r10]
     cmp al, dl
     jne .next_symbol
-    
     cmp al, 0
     je .found
-    
     inc r10
     cmp r10, 32
-    jl .compare_name
-
-.found:
-    mov rax, [var_symbols + rbx + 32]
-    jmp .exit
+    jl .compare_loop
 
 .next_symbol:
     add rbx, 40
     jmp .search_loop
 
-.not_found:
-    jmp errorline
-
-.exit:
+.found:
+    mov rax, [var_symbols + rbx + 32]
     pop rbx
     pop rcx
     pop rdi
     pop rsi
     ret
+
+.not_found:
+    jmp errorlinecmd
 ; -----------------------
 ; --- FUNCTION: cmdvar ---
 cmdvar:
-	mov rax, 1
-	mov rdi, 1
-	mov rsi, cmd_var_str
-	mov rdx, 4
+	push rbx
+    lea rdi, [var_name]
+    xor rax, rax
+    mov rcx, 8
+    rep stosq
+    pop rbx
     inc rbx
 
 .skip_1:
@@ -872,14 +1315,24 @@ cmdvar:
 .string_loop:
     mov al, [file + rbx]
     cmp al, '"'
-    je .done
+    je .string_done
     cmp al, 10
     je errorline
     mov [var_value + rdi], al
     inc rdi
     inc rbx
+    mov [var_value + rdi], 0
+    inc rdi
     jmp .string_loop
 
+.string_done:
+    mov byte [var_value + rdi], 0
+    inc rdi
+    mov byte [var_value + rdi], 0
+    inc rdi
+    mov [var_value_len], rdi
+    inc rbx
+    jmp .done
 .get_int:
     xor rdi, rdi
 .int_loop:
@@ -899,6 +1352,7 @@ cmdvar:
 
     mov [var_value + rdi], al
     inc rdi
+    
 .next_int:
     inc rbx
     jmp .int_loop
@@ -913,43 +1367,52 @@ cmdvar:
     jmp .done
 
 .done:
-	mov byte [var_value + rdi], 0
+    cmp qword [var_value_len], 8
+    je .skip_len_fix
     mov [var_value_len], rdi
-
+.skip_len_fix:
     mov rdi, var_symbols
-    add rdi, [symbol_count]
+    mov rax, [symbol_count]
+    add rdi, rax
+    
     push rdi
     
     lea rsi, [var_name]
-    mov rcx, 32
-    rep movsb
+    mov rcx, 4
+    rep movsq
     
     pop rdi
     
-    mov [rdi + 32], r15
-    
-    add qword [symbol_count], 40
+    mov [rdi + 32], r15     
 
     lea rsi, [var_value]
-    lea rdi, [data_buffer + r15]
+    mov rdi, data_buffer
+    add rdi, r15
     mov rcx, [var_value_len]
     rep movsb
 
-    add r15, [var_value_len]
+    mov rax, [var_value_len]
+    add r15, rax
     
-	xor rax, rax
-    mov rdi, var_name
+    add r15, 1
+    and r15, -2
+    
+    add qword [symbol_count], 40
+
+    xor rax, rax
+    lea rdi, [var_name]
     mov rcx, 8
     rep stosq
     
-    mov rdi, var_value
+    lea rdi, [var_value]
     mov rcx, 8
     rep stosq
-    
+
+    mov qword [var_value_len], 0
+
     inc rbx
-    
     jmp cmpchar
-    
+
 atoi_int_var:
 	xor rax, rax
 	xor rcx, rcx
@@ -968,55 +1431,95 @@ atoi_int_var:
     
 .done_var_int:
 	ret
-; --- FUNCTION: cmdvar ---
+; --- FUNCTION: cmdstart ---
+cmdstart:
+	call pickarg
+
+	lea rsi, [uefi_start_opcodes]
+	mov rcx, uefi_start_len
+	jmp .copystart
+
+.copystart:
+    lea rdi, [code_buffer + r14]
+    mov r11, rcx 
+    rep movsb
+    add r14, r11 
+    
+    jmp cmpchar
+	
+; --- FUNCTION: write_pe_header ---
+write_pe_header:
+    push rax
+    push rdi
+    push rsi
+    push rdx
+
+    mov rax, 8
+    mov rdi, [end_fd]
+    xor rsi, rsi
+    xor rdx, rdx
+    syscall
+
+    mov rax, 1
+    mov rdi, [end_fd]
+    mov rsi, pe_header_data 
+    mov rdx, 512            
+    syscall
+
+    pop rdx
+    pop rsi
+    pop rdi
+    pop rax
+    ret
 ; --- FUNCTION: endarchive ---
 endarchive:
+    call write_pe_header
+
+    mov rax, 8
+    mov rdi, [end_fd]
+    mov rsi, 4096
+    xor rdx, rdx
+    syscall
+
     mov rax, 1
     mov rdi, [end_fd]
     mov rsi, code_buffer
     mov rdx, r14
     syscall
-    
-    cmp r14, CODE_LIMIT
-    jae .write_data
-    
+
     mov rax, 8
     mov rdi, [end_fd]
-    mov rsi, CODE_LIMIT
-    mov rdx, 0
+    mov rsi, 8192
+    xor rdx, rdx
     syscall
 
-.write_data:
     mov rax, 1
     mov rdi, [end_fd]
     mov rsi, data_buffer
     mov rdx, r15
     syscall
 
+    mov rax, 8
+    mov rdi, [end_fd]
+    mov rsi, 12287
+    xor rdx, rdx
+    syscall
+    mov rax, 1
+    mov rdi, [end_fd]
+    mov rsi, newline
+    mov rdx, 1
+    syscall
+    
     mov rax, 3
     mov rdi, [fd]
     syscall
     mov rax, 3
     mov rdi, [end_fd]
     syscall
-
+    
     mov rax, 1
     mov rdi, 1
-    mov rsi, msg_lines_archive
-    mov rdx, msg_lines_archive_len
-    syscall
-
-    call print_r13_as_int
-
-    mov rax, 1
-    mov rdi, 1
-    mov rsi, newline
-    mov rdx, 1
-    syscall
-
-    mov rax, 1
-    mov rdi, 1
-    mov rsi, msg_done
+    mov rsi, msg_done  ; "[*] DONE"
     mov rdx, msg_done_len
     syscall
     
